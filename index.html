@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Medir área en mapa</title>
+
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <!-- Leaflet.draw CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
+  />
+
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="header">
+    <div class="brand">Medidor de Estacionamientos</div>
+    <div class="actions">
+      <button id="btn-clear" title="Borrar polígonos">Limpiar</button>
+    </div>
+  </div>
+
+  <!-- Panel GUI -->  
+  <section class="gui">  
+    <!-- Barra de búsqueda -->
+    <div class="row search">
+        <label for="search-input">Buscar</label>
+        <input id="search-input" type="text" placeholder="Dirección, lugar, ciudad…" autocomplete="off" />
+        <button id="search-btn" title="Buscar">Buscar</button>
+    </div>
+    <ul id="search-suggestions" class="suggestions" role="listbox" aria-label="Sugerencias de búsqueda"></ul>
+    <div class="row">  
+      <label for="unit-select">Unidades</label>  
+      <select id="unit-select" aria-label="Seleccionar unidades">  
+        <option value="m2" selected>m² (metros cuadrados)</option>  
+        <option value="ft2">ft² (pies cuadrados)</option>  
+      </select>  
+    </div>  
+  
+    <div class="row results">  
+      <div class="metric">  
+        <div class="label">Área</div>  
+        <div class="value" id="area-value">—</div>  
+        <button id="btn-copy-area" class="copy">Copiar</button>  
+      </div>  
+      <div class="metric">  
+        <div class="label">Perímetro</div>  
+        <div class="value" id="perimeter-value">—</div>  
+      </div>  
+    </div>  
+  </section>  
+  
+  <div id="map"></div>  
+  
+  <div class="info" id="info">  
+    Dibuja un polígono para medir el área y el perímetro.  
+  </div>
+
+  <div id="map"></div>
+
+  <div class="info" id="info">
+    Dibuja un polígono para medir el área en m² y ft².
+  </div>
+
+  <!-- Leaflet JS -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <!-- Leaflet.draw JS -->
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <!-- Turf.js -->
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+
+  <script src="/main.js"></script>
+</body>
+</html>
