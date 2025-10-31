@@ -2,74 +2,44 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <title>Medidor de Estacionamientos – Satelital</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Medir Estacionamientos - Google Maps</title>
+  <link rel="stylesheet" href="styles.css" />
 
-  <!-- MapLibre GL -->
-  <link href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
-  <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+  <!-- Turf.js para unir/restar geometrías -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 
-  <!-- Mapbox GL Draw (compatible con MapLibre) -->
-  <link rel="stylesheet" href="https://unpkg.com/@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css" />
-  <script src="https://unpkg.com/@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.js"></script>
-
-  <!-- Turf.js -->
-  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-
-  <link rel="stylesheet" href="./styles.css" />
+  <!-- Google Maps: Maps JavaScript + Places + Drawing + Geometry -->
+  <script async defer
+    src="https://maps.googleapis.com/maps/api/js?key=YOUR_GOOGLE_MAPS_API_KEY&libraries=places,drawing,geometry&callback=initApp">
+  </script>
 </head>
 <body>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <div class="dot"></div>
-        <span>Parking Measure</span>
-      </div>
-      <div class="search">
-        <input id="searchInput" type="text" placeholder="Buscar dirección o lugar..." autocomplete="off" />
-        <div id="searchResults" class="search-results"></div>
-      </div>
-      <div class="actions">
-        <button id="unitsToggle" class="btn ghost" title="Cambiar unidades">m²</button>
-        <a class="btn primary" href="#" id="ctaEstimate">Solicitar propuesta</a>
-      </div>
-    </header>
-
-    <main>
-      <div id="map"></div>
-
-      <div class="panel">
-        <div class="toolbar">
-          <button id="drawOuterBtn" class="btn">Dibujar área</button>
-          <button id="drawHoleBtn" class="btn">Dibujar isla</button>
-          <button id="modifyBtn" class="btn">Modificar</button>
-          <button id="deleteBtn" class="btn danger">Borrar</button>
-        </div>
-
-        <div class="metrics">
-          <div class="metric">
-            <label>Área neta</label>
-            <div id="areaValue" class="value">—</div>
-          </div>
-          <div class="metric">
-            <label>Perímetro total</label>
-            <div id="perimeterValue" class="value">—</div>
-          </div>
-        </div>
-
-        <div class="hint">
-          Consejo: dibuja el contorno del estacionamiento con “Dibujar área”. Luego usa “Dibujar isla” para descontar jardineras o zonas de concreto dentro del polígono.
-        </div>
-      </div>
-    </main>
-
-    <footer class="foot">
-      <div class="attribution">
-        Mapa: MapTiler Hybrid · © MapTiler · © OpenStreetMap contributors
-      </div>
-    </footer>
+  <div class="topbar">
+    <input id="search" type="text" placeholder="Buscar dirección o lugar..." />
+    <div class="controls">
+      <button id="mode-add" title="Agregar polígonos que suman">Agregar área</button>
+      <button id="mode-hole" title="Agregar polígonos que restan">Agregar hueco</button>
+      <button id="undo" title="Deshacer último del modo activo">Deshacer</button>
+      <button id="clear" title="Quitar todos">Limpiar</button>
+      <label class="toggle" title="Cambiar entre híbrido y satélite puro">
+        <input id="toggle-type" type="checkbox" />
+        Satélite / Híbrido
+      </label>
+    </div>
   </div>
 
-  <script src="./app.js"></script>
+  <div id="map"></div>
+
+  <div class="panel">
+    <h4>Mediciones</h4>
+    <div id="stats">
+      Área neta: —<br/>
+      Perímetro neto: —<br/>
+      Polígonos: 0 | Huecos: 0
+    </div>
+  </div>
+
+  <script src="app.js"></script>
 </body>
 </html>
