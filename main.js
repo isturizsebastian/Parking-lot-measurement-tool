@@ -1,284 +1,296 @@
-// public/main.js
-// GUI + Leaflet + Leaflet.draw + Turf.js + Búsqueda Nominatim
+// ========= Config =========
+const MAPTILER_KEY = 'YOUR_MAPTILER_KEY';
+const STYLE = 'hybrid'; // 'hybrid' o 'satellite'
+const START_CENTER = [-74.0, 40.72]; // NYC aprox (lon, lat)
+const START_ZOOM = 12;
 
-// --- Constantes de conversión ---
-const M2_TO_FT2 = 10.76391041671;
-const M_TO_FT = 3.280839895;
+// ========= Estado =========
+let currentUnits = 'm2'; // 'm2' o 'ft2'
+let mode = 'idle'; // 'idle' | 'draw-outer' | 'draw-hole' | 'modify'
 
-// --- Elementos del DOM ---
-const infoEl = document.getElementById('info');
-const btnClear = document.getElementById('btn-clear');
-const unitSelect = document.getElementById('unit-select');
-const areaValueEl = document.getElementById('area-value');
-const perimeterValueEl = document.getElementById('perimeter-value');
-const btnCopyArea = document.getElementById('btn-copy-area');
+// ========= Inicializar Mapa =========
+const map = new maplibregl.Map({
+  container: 'map',
+  style: `https://api.maptiler.com/maps/${STYLE}/style.json?key=${MAPTILER_KEY}`,
+  center: START_CENTER,
+  zoom: START_ZOOM,
+  attributionControl: true
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-// Búsqueda
-const searchInput = document.getElementById('search-input');
-const searchBtn = document.getElementById('search-btn');
-const suggestionsEl = document.getElementById('search-suggestions');
+// ========= Draw =========
+const draw = new MapboxDraw({
+  displayControlsDefault: false,
+  controls: { polygon: false, trash: false },
+  styles: [
+    // Relleno polígono
+    {
+      id: 'gl-draw-polygon-fill',
+      type: 'fill',
+      filter: ['all',['==','$type','Polygon'],['!=','mode','static']],
+      paint: { 'fill-color': '#4cc3ff', 'fill-opacity': 0.22 }
+    },
+    // Borde polígono
+    {
+      id: 'gl-draw-polygon-stroke-active',
+      type: 'line',
+      filter: ['all',['==','$type','Polygon'],['!=','mode','static']],
+      paint: { 'line-color': '#4cc3ff', 'line-width': 2 }
+    },
+    // Vértices
+    {
+      id: 'gl-draw-polygon-and-line-vertex-halo-active',
+      type: 'circle',
+      filter: ['all',['==','meta','vertex'],['!=','mode','static']],
+      paint: { 'circle-radius': 7, 'circle-color': '#fff' }
+    },
+    {
+      id: 'gl-draw-polygon-and-line-vertex-active',
+      type: 'circle',
+      filter: ['all',['==','meta','vertex'],['!=','mode','static']],
+      paint: { 'circle-radius': 5, 'circle-color': '#4cc3ff' }
+    }
+  ]
+});
+map.addControl(draw, 'top-left');
 
-// --- Estado en memoria ---
-let lastAreaM2 = null;       // área en m²
-let lastPerimeterM = null;   // perímetro en metros
-let tempBoundaryLayer = null; // capa temporal para mostrar límites de resultados
+// ========= Utilidades =========
+const fmt = (num, digits=2) => num.toLocaleString(undefined, { maximumFractionDigits: digits });
 
-// --- Inicialización del mapa ---
-const map = L.map('map', { zoomControl: true }).setView([39.5, -98.35], 4);
+function computeMetrics() {
+  const fc = draw.getAll();
+  if (!fc || !fc.features || fc.features.length === 0) {
+    return { areaM2: 0, perimeterM: 0 };
+  }
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 20,
-  attribution: '&copy; OpenStreetMap contributors'
-}).addTo(map);
+  let totalArea = 0;     // m²
+  let totalPerimeter = 0; // m
 
-// Capa para dibujos del usuario
-const drawnItems = new L.FeatureGroup();
-map.addLayer(drawnItems);
+  fc.features.forEach(f => {
+    if (f.geometry.type === 'Polygon' || f.geometry.type === 'MultiPolygon') {
+      // Área geodésica
+      totalArea += turf.area(f);
 
-// Control de dibujo y edición
-const drawControl = new L.Control.Draw({
-  draw: {
-    marker: false,
-    circle: false,
-    circlemarker: false,
-    polyline: false,
-    rectangle: false,
-    polygon: {
-      allowIntersection: false,
-      showArea: false, // usamos Turf para el cálculo
-      shapeOptions: {
-        color: '#4f8cff',
-        weight: 2,
-        fillColor: '#4f8cff',
-        fillOpacity: 0.15
+      // Perímetro: suma longitudes de todos los anillos
+      if (f.geometry.type === 'Polygon') {
+        f.geometry.coordinates.forEach(ring => {
+          const line = turf.lineString(ring);
+          totalPerimeter += turf.length(line, { units: 'kilometers' }) * 1000.0;
+        });
+      } else if (f.geometry.type === 'MultiPolygon') {
+        f.geometry.coordinates.forEach(polyCoords => {
+          polyCoords.forEach(ring => {
+            const line = turf.lineString(ring);
+            totalPerimeter += turf.length(line, { units: 'kilometers' }) * 1000.0;
+          });
+        });
       }
     }
-  },
-  edit: {
-    featureGroup: drawnItems,
-    remove: true
-  }
-});
-map.addControl(drawControl);
+  });
 
-// --- Utilidades de formato ---
-function formatAreaByUnit(areaM2, unit) {
-  if (areaM2 == null || isNaN(areaM2)) return '—';
-  if (unit === 'ft2') {
-    const v = areaM2 * M2_TO_FT2;
-    return `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} ft²`;
-  }
-  return `${areaM2.toLocaleString(undefined, { maximumFractionDigits: 2 })} m²`;
-}
-function formatPerimeterByUnit(perimeterM, unit) {
-  if (perimeterM == null || isNaN(perimeterM)) return '—';
-  if (unit === 'ft2') {
-    const v = perimeterM * M_TO_FT;
-    return `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} ft`;
-  }
-  return `${perimeterM.toLocaleString(undefined, { maximumFractionDigits: 2 })} m`;
-}
-// Convierte Polygon a línea y calcula longitud geodésica en metros
-function perimeterMetersFromPolygon(feature) {
-  try {
-    const line = turf.polygonToLine(feature); // anillo exterior
-    const lengthM = turf.length(line, { units: 'meters' });
-    return lengthM;
-  } catch {
-    return 0;
-  }
+  return { areaM2: Math.abs(totalArea), perimeterM: Math.abs(totalPerimeter) };
 }
 
-// --- Render de resultados ---
-function renderResults() {
-  const unit = unitSelect.value; // 'm2' o 'ft2'
-  areaValueEl.textContent = formatAreaByUnit(lastAreaM2, unit);
-  perimeterValueEl.textContent = formatPerimeterByUnit(lastPerimeterM, unit);
+function updateMetricsUI() {
+  const { areaM2, perimeterM } = computeMetrics();
+  const areaEl = document.getElementById('areaValue');
+  const perimEl = document.getElementById('perimeterValue');
 
-  if (lastAreaM2 == null) {
-    infoEl.textContent = 'Dibuja un polígono para medir el área y el perímetro.';
+  if (areaM2 <= 0) {
+    areaEl.textContent = '—';
+    perimEl.textContent = '—';
+    return;
+  }
+
+  if (currentUnits === 'm2') {
+    areaEl.textContent = `${fmt(areaM2, 0)} m²`;
   } else {
-    const areaTextBoth = `${lastAreaM2.toLocaleString(undefined, { maximumFractionDigits: 2 })} m² | ${(lastAreaM2 * M2_TO_FT2).toLocaleString(undefined, { maximumFractionDigits: 2 })} ft²`;
-    const perimTextBoth = `${lastPerimeterM.toLocaleString(undefined, { maximumFractionDigits: 2 })} m | ${(lastPerimeterM * M_TO_FT).toLocaleString(undefined, { maximumFractionDigits: 2 })} ft`;
-    infoEl.innerHTML = `Área: <strong>${areaTextBoth}</strong><br/>Perímetro: <strong>${perimTextBoth}</strong>`;
+    const ft2 = areaM2 * 10.76391041671;
+    areaEl.textContent = `${fmt(ft2, 0)} ft²`;
+  }
+
+  // Perímetro: mostrar en m o ft
+  if (currentUnits === 'm2') {
+    if (perimeterM < 1000) perimEl.textContent = `${fmt(perimeterM, 1)} m`;
+    else perimEl.textContent = `${fmt(perimeterM/1000, 2)} km`;
+  } else {
+    const feet = perimeterM * 3.280839895;
+    if (feet < 5280) perimEl.textContent = `${fmt(feet, 1)} ft`;
+    else perimEl.textContent = `${fmt(feet/5280, 2)} mi`;
   }
 }
-function computeFromLayer(layer) {
-  const gj = layer.toGeoJSON();
-  const feature = gj.type === 'Feature' ? gj : { type: 'Feature', geometry: gj, properties: {} };
-  lastAreaM2 = turf.area(feature);
-  lastPerimeterM = perimeterMetersFromPolygon(feature);
-  renderResults();
-}
 
-// --- Eventos de Leaflet Draw ---
-map.on(L.Draw.Event.CREATED, (e) => {
-  drawnItems.clearLayers();
-  const layer = e.layer;
-  drawnItems.addLayer(layer);
-  computeFromLayer(layer);
-});
-map.on('draw:edited', (e) => {
-  e.layers.eachLayer((layer) => {
-    computeFromLayer(layer);
-  });
-});
-map.on('draw:deleted', () => {
-  lastAreaM2 = null;
-  lastPerimeterM = null;
-  renderResults();
-});
-
-// --- Interacciones del GUI ---
-btnClear.addEventListener('click', () => {
-  drawnItems.clearLayers();
-  lastAreaM2 = null;
-  lastPerimeterM = null;
-  renderResults();
-});
-unitSelect.addEventListener('change', renderResults);
-btnCopyArea.addEventListener('click', async () => {
-  if (lastAreaM2 == null) return;
-  const unit = unitSelect.value;
-  const value = unit === 'ft2' ? (lastAreaM2 * M2_TO_FT2) : lastAreaM2;
-  const textToCopy = `${value.toFixed(2)} ${unit === 'ft2' ? 'ft^2' : 'm^2'}`;
-  try {
-    await navigator.clipboard.writeText(textToCopy);
-    btnCopyArea.textContent = 'Copiado';
-  } catch {
-    const ta = document.createElement('textarea');
-    ta.value = textToCopy;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    ta.remove();
-    btnCopyArea.textContent = 'Copiado';
+function setMode(newMode) {
+  mode = newMode;
+  if (mode === 'draw-outer' || mode === 'draw-hole') {
+    draw.changeMode('draw_polygon');
+  } else if (mode === 'modify') {
+    draw.changeMode('simple_select');
+  } else {
+    draw.changeMode('simple_select');
   }
-  setTimeout(() => (btnCopyArea.textContent = 'Copiar'), 1200);
+}
+
+// Añadir un anillo interior (hueco) a un polígono existente
+function addHoleToContainingPolygon(holeFeature) {
+  const fc = draw.getAll();
+  if (!fc.features || fc.features.length === 0) return false;
+
+  const holeGeom = holeFeature.geometry;
+  if (!holeGeom || holeGeom.type !== 'Polygon') return false;
+
+  // Usamos el centroide del hueco para identificar el polígono contenedor
+  const holeCentroid = turf.centroid(holeFeature);
+
+  // Buscar primer polígono que contenga el centroide
+  let targetId = null;
+  let targetFeature = null;
+  for (const f of fc.features) {
+    if (f.id === holeFeature.id) continue;
+    if (f.geometry.type !== 'Polygon') continue;
+    if (turf.booleanPointInPolygon(holeCentroid, f)) {
+      targetId = f.id;
+      targetFeature = f;
+      break;
+    }
+  }
+
+  if (!targetFeature) return false;
+
+  // Asegurar que los anillos tengan orientación correcta (CCW exterior, CW interior)
+  const rewoundTarget = turf.rewind(targetFeature, { reverse: false });
+  const rewoundHole = turf.rewind(holeFeature, { reverse: true }); // invierte a CW si es necesario
+
+  const targetCoords = rewoundTarget.geometry.coordinates.slice();
+  const holeCoords = rewoundHole.geometry.coordinates[0];
+
+  // Añadir el hole como un nuevo anillo interior
+  targetCoords.push(holeCoords);
+
+  // Actualizar el polígono en Draw
+  draw.add({
+    id: targetId + '_updated_' + Date.now(),
+    type: 'Feature',
+    properties: {},
+    geometry: { type: 'Polygon', coordinates: targetCoords }
+  });
+
+  // Eliminar el polígono antiguo y el hueco temporal
+  try { draw.delete([targetId]); } catch (e) {}
+  try { draw.delete([holeFeature.id]); } catch (e) {}
+
+  return true;
+}
+
+// ========= Eventos de dibujo =========
+map.on('draw.create', (e) => {
+  if (mode === 'draw-hole') {
+    // Intentar convertir el nuevo polígono en un anillo interior de un polígono existente
+    const ok = addHoleToContainingPolygon(e.features[0]);
+    if (!ok) {
+      // Si no hubo contenedor, simplemente dejamos el polígono como independiente
+      // o lo borramos si prefieres forzar que sea dentro de un polígono
+      // draw.delete(e.features[0].id);
+    }
+  }
+  updateMetricsUI();
+});
+map.on('draw.update', updateMetricsUI);
+map.on('draw.delete', updateMetricsUI);
+map.on('load', updateMetricsUI);
+
+// ========= Controles UI =========
+document.getElementById('drawOuterBtn').addEventListener('click', () => setMode('draw-outer'));
+document.getElementById('drawHoleBtn').addEventListener('click', () => setMode('draw-hole'));
+document.getElementById('modifyBtn').addEventListener('click', () => setMode('modify'));
+document.getElementById('deleteBtn').addEventListener('click', () => {
+  const sel = draw.getSelectedIds();
+  if (sel.length) draw.delete(sel);
+  else draw.trash();
+  updateMetricsUI();
 });
 
-// ---------------------------
-// BÚSQUEDA CON NOMINATIM
-// ---------------------------
+document.getElementById('unitsToggle').addEventListener('click', (e) => {
+  currentUnits = currentUnits === 'm2' ? 'ft2' : 'm2';
+  e.currentTarget.textContent = currentUnits === 'm2' ? 'm²' : 'ft²';
+  updateMetricsUI();
+});
 
-// Debounce helper
-function debounce(fn, delay = 350) {
-  let t;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), delay);
-  };
-}
+// CTA demo
+document.getElementById('ctaEstimate').addEventListener('click', (e) => {
+  e.preventDefault();
+  const payload = draw.getAll();
+  console.log('Payload GeoJSON para propuesta:', payload);
+  alert('GeoJSON del dibujo registrado en la consola. Integra aquí el flujo de “solicitar propuesta”.');
+});
 
-// Construir URL de Nominatim
-function makeNominatimUrl(q) {
-  const params = new URLSearchParams({
-    q,
-    format: 'jsonv2',
-    addressdetails: '1',
-    polygon_geojson: '1',
-    limit: '5'
-  });
-  return `https://nominatim.openstreetmap.org/search?${params.toString()}`;
-}
+// ========= Búsqueda (Geocoding MapTiler) =========
+const searchInput = document.getElementById('searchInput');
+const searchResults = document.getElementById('searchResults');
+let searchTimer = null;
 
-// Renderizar sugerencias
-function showSuggestions(items) {
-  suggestionsEl.innerHTML = '';
-  if (!items || items.length === 0) {
-    suggestionsEl.classList.remove('show');
+function showResults(items) {
+  searchResults.innerHTML = '';
+  if (!items || !items.length) {
+    searchResults.classList.remove('visible');
     return;
   }
-  items.forEach((it, idx) => {
-    const li = document.createElement('li');
-    li.role = 'option';
-    li.dataset.index = String(idx);
-    li.textContent = it.display_name;
-    li.addEventListener('click', () => selectSuggestion(it));
-    suggestionsEl.appendChild(li);
-  });
-  // Posición básica debajo del input
-  const rect = searchInput.getBoundingClientRect();
-  suggestionsEl.style.position = 'absolute';
-  suggestionsEl.style.left = `${rect.left}px`;
-  suggestionsEl.style.top = `${rect.bottom + window.scrollY + 4}px`;
-  suggestionsEl.style.width = `${rect.width + 110}px`; // ancho aprox considerando el botón
-  suggestionsEl.classList.add('show');
-}
-function hideSuggestions() {
-  suggestionsEl.classList.remove('show');
-}
+  items.slice(0, 6).forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'item';
+    el.textContent = item.place_name || item.text || item.properties?.name || item.name;
+    el.addEventListener('click', () => {
+      searchResults.classList.remove('visible');
+      searchInput.value = el.textContent;
 
-// Selección de una sugerencia
-function selectSuggestion(item) {
-  hideSuggestions();
-  searchInput.value = item.display_name || '';
-
-  // Limpiar capa temporal
-  if (tempBoundaryLayer) {
-    map.removeLayer(tempBoundaryLayer);
-    tempBoundaryLayer = null;
-  }
-
-  // Si viene con polígono, muéstralo
-  if (item.geojson && (item.geojson.type === 'Polygon' || item.geojson.type === 'MultiPolygon')) {
-    tempBoundaryLayer = L.geoJSON(item.geojson, {
-      style: { color: '#22c55e', weight: 2, fillOpacity: 0.1 }
-    }).addTo(map);
-    map.fitBounds(tempBoundaryLayer.getBounds(), { padding: [20, 20] });
-  } else if (item.boundingbox) {
-    // boundingbox: [south, north, west, east] en string
-    const [s, n, w, e] = item.boundingbox.map(parseFloat);
-    const bounds = L.latLngBounds([s, w], [n, e]);
-    map.fitBounds(bounds, { padding: [20, 20] });
-  } else if (item.lat && item.lon) {
-    map.flyTo([parseFloat(item.lat), parseFloat(item.lon)], 16);
-  }
-}
-
-// Ejecutar búsqueda
-async function performSearch(q) {
-  if (!q || q.trim().length < 3) {
-    hideSuggestions();
-    return;
-  }
-  try {
-    // Nominatim requiere un User-Agent y referer válidos; los navegadores ya envían referer.
-    const url = makeNominatimUrl(q.trim());
-    const res = await fetch(url, {
-      headers: {
-        'Accept': 'application/json'
+      // Volar a bbox si existe, si no, al centro
+      const bbox = item.bbox || item.properties?.bbox;
+      if (bbox && bbox.length === 4) {
+        map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 900 });
+      } else if (item.center && item.center.length === 2) {
+        map.flyTo({ center: item.center, zoom: 16, duration: 900 });
       }
     });
-    if (!res.ok) throw new Error('Error en la búsqueda');
-    const data = await res.json();
-    showSuggestions(data);
-  } catch (e) {
-    console.warn('Búsqueda fallida:', e);
-    hideSuggestions();
-  }
+    searchResults.appendChild(el);
+  });
+  searchResults.classList.add('visible');
 }
 
-// Eventos de búsqueda
-const debouncedSearch = debounce(() => performSearch(searchInput.value), 350);
+async function geocode(query) {
+  const url = `https://api.maptiler.com/geocoding/${encodeURIComponent(query)}.json?key=${MAPTILER_KEY}&limit=6`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Geocoding failed');
+  const data = await res.json();
+  // Normalizamos un poco a objetos tipo Mapbox response
+  const feats = (data.features || []).map(f => ({
+    place_name: f.place_name,
+    center: f.center,
+    bbox: f.bbox,
+    properties: f.properties || {}
+  }));
+  return feats;
+}
 
-searchInput.addEventListener('input', debouncedSearch);
-searchInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    performSearch(searchInput.value);
-  } else if (e.key === 'Escape') {
-    hideSuggestions();
+searchInput.addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = searchInput.value.trim();
+  if (q.length < 3) {
+    searchResults.classList.remove('visible');
+    return;
   }
+  searchTimer = setTimeout(async () => {
+    try {
+      const items = await geocode(q);
+      showResults(items);
+    } catch (e) {
+      console.error(e);
+      searchResults.classList.remove('visible');
+    }
+  }, 250);
 });
-searchBtn.addEventListener('click', () => performSearch(searchInput.value));
 
-// Ocultar sugerencias si se hace click fuera
 document.addEventListener('click', (e) => {
-  if (!suggestionsEl.contains(e.target) && e.target !== searchInput) {
-    hideSuggestions();
+  if (!searchResults.contains(e.target) && e.target !== searchInput) {
+    searchResults.classList.remove('visible');
   }
 });
-
-// Render inicial
-renderResults();
